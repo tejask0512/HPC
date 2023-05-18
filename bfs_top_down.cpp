@@ -112,3 +112,94 @@ void bfs_bottom_up(graph* graph, solution* sol)
 
 
 }
+
+
+
+
+// Take one step of "top-down" BFS.  For each vertex on the frontier,
+// follow all outgoing edges, and add all neighboring vertices to the
+// new_frontier.
+void top_down_step(
+    graph* g,
+    vertex_set* frontier,
+    vertex_set* new_frontier,
+    int* distances)
+{
+    int local_count;
+
+    // #pragma omp parallel num_threads(NUM_THREADS) private(local_count) 
+     #pragma omp parallel private(local_count)
+    {
+        local_count = 0;
+        int* local_frontier = (int*)malloc(sizeof(int) * (g->num_nodes/NUM_THREADS));
+        #pragma omp for 
+        for (int i=0; i<frontier->count; i++) {            
+
+            int node = frontier->present[i];
+
+            int start_edge = g->outgoing_starts[node];
+            int end_edge = (node == g->num_nodes-1) ? g->num_edges : g->outgoing_starts[node+1];
+
+            // attempt to add all neighbors to the new frontier
+            for (int neighbor=start_edge; neighbor<end_edge; neighbor++) {
+                int outgoing = g->outgoing_edges[neighbor];
+
+                if( __sync_bool_compare_and_swap(&distances[outgoing], NOT_VISITED_MARKER, distances[node] + 1)) {                    
+                    local_frontier[local_count] = outgoing;
+                    local_count++;
+                }
+            }
+        }
+
+        #pragma omp critical                    
+        {
+            memcpy(new_frontier->present+new_frontier->count, local_frontier, local_count*sizeof(int));
+            new_frontier->count += local_count;
+        }
+    }
+}
+
+// Implements top-down BFS.
+//
+// Result of execution is that, for each node in the graph, the
+// distance to the root is stored in sol.distances.
+void bfs_top_down(graph* graph, solution* sol) {
+
+    vertex_set list1;
+    vertex_set list2;
+    vertex_set_init(&list1, graph->num_nodes);
+    vertex_set_init(&list2, graph->num_nodes);
+
+    vertex_set* frontier = &list1;
+    vertex_set* new_frontier = &list2;
+
+    // initialize all nodes to NOT_VISITED
+    for (int i=0; i<graph->num_nodes; i++)
+        sol->distances[i] = NOT_VISITED_MARKER;
+    
+        
+    // setup frontier with the root node    
+    // just like put the root into queue
+    frontier->present[frontier->count++] = ROOT_NODE_ID;
+
+    // set the root distance with 0
+    sol->distances[ROOT_NODE_ID] = 0;
+
+    // just like pop the queue
+    while (frontier->count != 0) {
+
+        double start_time = CycleTimer::currentSeconds();
+
+        vertex_set_clear(new_frontier);
+
+        top_down_step(graph, frontier, new_frontier, sol->distances);
+
+        double end_time = CycleTimer::currentSeconds();
+        printf("frontier=%-10d %.4f sec\n", frontier->count, end_time - start_time);
+
+        // swap pointers
+        vertex_set* tmp = frontier;
+        frontier = new_frontier;
+        new_frontier = tmp;
+    }
+}
